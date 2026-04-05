@@ -2,8 +2,6 @@
 BackEnd for new Aggregator/Swap
 
 
-# Agro-Onyx_Backend
-BackEnd for new Aggregator/Swap
 
 How to use:
 pip install -r requirements.txt
