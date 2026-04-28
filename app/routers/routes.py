@@ -150,4 +150,4 @@ def build(req: BuildRequest, user: str = Depends(get_current_user)):
     notes.append("Unsigned txs omit gas fields. Frontend wallet should estimate gas + set EIP-1559 fees.")
     notes.append("Nonces are fetched per-chain at build time; if user signs later, refresh nonces to avoid replacement/invalid nonce.")
 
-    return BuildResponse(unsigned_txs=unsigned, notes=notes)f
+    return BuildResponse(unsigned_txs=unsigned, notes=notes)
