@@ -14,15 +14,20 @@ from hypothesis import strategies as st
 # ---------------------------------------------------------------------------
 
 def _slippage_min(amount_out: int, slippage_bps: int) -> int:
-    return int(amount_out * (10_000 - slippage_bps) // 10_000)
+    """Fixed version: enforces a floor of 1 for non-zero outputs so that
+    integer truncation can never produce amountOutMin = 0."""
+    if amount_out == 0:
+        return 0
+    return max(1, int(amount_out * (10_000 - slippage_bps) // 10_000))
 
 
 class TestSlippageMin:
     @given(
-        amount_out=st.integers(min_value=0, max_value=10**30),
+        amount_out=st.integers(min_value=1, max_value=10**30),
         slippage_bps=st.integers(min_value=1, max_value=2000),
     )
     def test_result_never_exceeds_amount_out(self, amount_out, slippage_bps):
+        # Only meaningful for positive outputs; amount_out=0 is rejected upstream.
         result = _slippage_min(amount_out, slippage_bps)
         assert result <= amount_out
 
@@ -41,10 +46,89 @@ class TestSlippageMin:
         bps_hi = bps_lo + 1
         assert _slippage_min(amount_out, bps_hi) <= _slippage_min(amount_out, bps_lo)
 
-    @given(amount_out=st.integers(min_value=0, max_value=10**30))
+    @given(amount_out=st.integers(min_value=1, max_value=10**30))
     def test_zero_slippage_bps_would_return_full_amount(self, amount_out):
         # bps=0 is outside the schema-validated range but the math should hold
+        # for positive amounts (amount_out=0 is rejected by routes before this is called)
         assert _slippage_min(amount_out, 0) == amount_out
+
+    def test_zero_amount_out_returns_zero(self):
+        # amount_out=0 always returns 0 (route rejects before slippage_min is called)
+        assert _slippage_min(0, 50) == 0
+        assert _slippage_min(0, 2000) == 0
+
+    @given(
+        amount_out=st.integers(min_value=1, max_value=10**30),
+        slippage_bps=st.integers(min_value=1, max_value=2000),
+    )
+    def test_result_at_least_one_for_positive_amount(self, amount_out, slippage_bps):
+        # No matter how small amount_out is, the floor prevents amountOutMin=0
+        assert _slippage_min(amount_out, slippage_bps) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Bridge fee helpers
+# ---------------------------------------------------------------------------
+
+def _bridge_fee_amount(amount: int, fee_bps: int) -> int:
+    return int(amount * fee_bps // 10_000)
+
+def _bridge_amount_received(amount: int, fee_bps: int) -> int:
+    return amount - _bridge_fee_amount(amount, fee_bps)
+
+
+class TestBridgeFeeHelpers:
+    @given(
+        amount=st.integers(min_value=0, max_value=10**30),
+        fee_bps=st.integers(min_value=0, max_value=10_000),
+    )
+    def test_received_never_exceeds_amount(self, amount, fee_bps):
+        assert _bridge_amount_received(amount, fee_bps) <= amount
+
+    @given(
+        amount=st.integers(min_value=0, max_value=10**30),
+        fee_bps=st.integers(min_value=0, max_value=10_000),
+    )
+    def test_received_non_negative(self, amount, fee_bps):
+        assert _bridge_amount_received(amount, fee_bps) >= 0
+
+    @given(amount=st.integers(min_value=0, max_value=10**30))
+    def test_zero_fee_is_identity(self, amount):
+        assert _bridge_amount_received(amount, 0) == amount
+
+    @given(amount=st.integers(min_value=0, max_value=10**30))
+    def test_full_fee_yields_zero(self, amount):
+        assert _bridge_amount_received(amount, 10_000) == 0
+
+    @given(
+        amount=st.integers(min_value=1, max_value=10**30),
+        fee_lo=st.integers(min_value=0, max_value=9_999),
+    )
+    def test_higher_fee_gives_lower_or_equal_received(self, amount, fee_lo):
+        fee_hi = fee_lo + 1
+        assert _bridge_amount_received(amount, fee_hi) <= _bridge_amount_received(amount, fee_lo)
+
+
+# ---------------------------------------------------------------------------
+# Compound worst-case slippage
+# ---------------------------------------------------------------------------
+
+class TestCompoundSlippage:
+    @given(
+        b_out=st.integers(min_value=1, max_value=10**30),
+        slippage_bps=st.integers(min_value=1, max_value=2000),
+    )
+    def test_worst_case_le_single_leg_min(self, b_out, slippage_bps):
+        single_min = _slippage_min(b_out, slippage_bps)
+        worst_case = _slippage_min(_slippage_min(b_out, slippage_bps), slippage_bps)
+        assert worst_case <= single_min
+
+    @given(
+        b_out=st.integers(min_value=1, max_value=10**30),
+        slippage_bps=st.integers(min_value=1, max_value=2000),
+    )
+    def test_worst_case_non_negative(self, b_out, slippage_bps):
+        assert _slippage_min(_slippage_min(b_out, slippage_bps), slippage_bps) >= 0
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +177,16 @@ class TestQuoteRequestSchema:
         )
         assert req.amount_in == amount_in
 
+    def test_amount_in_zero_rejected(self):
+        with pytest.raises(ValidationError):
+            QuoteRequest(
+                chain_a_token_in=ADDR,
+                chain_a_token_out=ADDR,
+                amount_in=0,
+                chain_b_token_in=ADDR,
+                chain_b_token_out=ADDR,
+            )
+
 
 class TestBuildRequestSchema:
     @given(slippage_bps=st.integers(min_value=1, max_value=2000))
@@ -129,6 +223,34 @@ class TestBuildRequestSchema:
         )
         assert req.amount_in == amount_in
         assert req.bridge_amount == bridge_amount
+
+    def test_amount_in_zero_rejected(self):
+        with pytest.raises(ValidationError):
+            BuildRequest(
+                sender_evm_address=ADDR,
+                recipient_evm_address=ADDR,
+                chain_a_token_in=ADDR,
+                chain_a_token_out=ADDR,
+                amount_in=0,
+                chain_b_token_in=ADDR,
+                chain_b_token_out=ADDR,
+                bridge_token=ADDR,
+                bridge_amount=500,
+            )
+
+    def test_bridge_amount_zero_rejected(self):
+        with pytest.raises(ValidationError):
+            BuildRequest(
+                sender_evm_address=ADDR,
+                recipient_evm_address=ADDR,
+                chain_a_token_in=ADDR,
+                chain_a_token_out=ADDR,
+                amount_in=1000,
+                chain_b_token_in=ADDR,
+                chain_b_token_out=ADDR,
+                bridge_token=ADDR,
+                bridge_amount=0,
+            )
 
 
 # ---------------------------------------------------------------------------
