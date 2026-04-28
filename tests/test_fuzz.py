@@ -291,15 +291,16 @@ class TestJWT:
 
 # ---------------------------------------------------------------------------
 # DB helpers – in-memory user store
-# Bcrypt is intentionally slow; patch pwd_context with a fast scheme so we
-# can exercise the registration/auth *logic* under fuzz without multi-second delays.
+# Bcrypt is intentionally slow; patch pwd_context with bcrypt at the lowest
+# work factor (rounds=4) to keep tests fast while still using a
+# cryptographically sound algorithm.
 # ---------------------------------------------------------------------------
 
 from unittest.mock import patch
 from passlib.context import CryptContext
 from app.db import create_user, authenticate, _USERS
 
-_FAST_CTX = CryptContext(schemes=["md5_crypt"], deprecated="auto")
+_FAST_CTX = CryptContext(schemes=["bcrypt"], bcrypt__rounds=4)
 
 
 class TestDB:

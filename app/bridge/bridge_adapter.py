@@ -87,7 +87,7 @@ def build_bridge_tx(
         relayer_fee_pct,
         quote_timestamp,
         b"",            # no hook message
-        2**256 - 1,     # maxCount = unlimited
+        2**256 - 1,     # maxCount: pass max uint256 to skip the per-deposit size cap
     ).build_transaction(
         {
             "chainId": chain_src.chain_id,

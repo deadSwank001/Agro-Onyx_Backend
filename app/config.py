@@ -49,7 +49,8 @@ class Settings(BaseModel):
     bridge_fee_bps: int = int(os.getenv("BRIDGE_FEE_BPS", "0"))
 
     # Across Protocol SpokePool address on the source chain.
-    # Default is the mainnet v2 SpokePool; set SPOKE_POOL_CHAIN_A env var.
+    # Default is the Across v2 SpokePool on Ethereum mainnet (chain ID 1).
+    # Override with SPOKE_POOL_CHAIN_A env var for other networks.
     spoke_pool_chain_a: str = os.getenv(
         "SPOKE_POOL_CHAIN_A", "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5"
     )
